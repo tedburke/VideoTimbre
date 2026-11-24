@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>VideoTimbre music synthesizer</title>
+    <meta charset="utf-8">
+    <style>
+        :root {--marg:20px;}
+        body {font-size:160%;}
+        div {margin:0; padding:0;}
+        canvas {margin:0; padding:0;}
+        .hspacer {float:left; width:var(--marg);height:var(--marg);}
+        .vspacer {display:block; width:var(--marg);height:var(--marg);}
+        #vidWaveDiv {float:left;}
+        #scriptDiv {float:left; width:calc(100% - 820px - 3*var(--marg));}
+        #vid {display:none;}
+        #vidCanvas {
+            display: inline-block;
+            width: 800px;
+            height: 600px;
+            vertical-align: top;
+        }
+        #waveCanvas {
+            box-sizing: border-box;
+            display:block;
+            width: 800px;
+            height: 160px;
+            background-color: #ddd;
+            border: 2px solid black;
+        }
+        #banner {width:800px; height:120px;}
+        #controls {width:800px; height:40px;}
+        #userDefinedCode {
+            box-sizing: border-box;
+            width:100%;
+            max-width:800px;
+            height:calc(600px - var(--marg));
+            font-size:100%;
+            padding:1em;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="vspacer"></div>
+    <div class="hspacer"></div>
+    <div id="vidWaveDiv">
+        <video id="vid" autoplay playsinline> </video>
+        <canvas id="vidCanvas" width="800" height="600"></canvas>
+        <div class="vspacer"></div>
+        <canvas id="waveCanvas"></canvas>
+    </div>
+    <div class="hspacer"></div>
+    <div id="scriptDiv">
+        <div id="banner"><img src="videotimbre_banner.png"></div>
+        <div class="vspacer"></div>
+        <div id="controls">
+            <label>Select active script:</label>
+            <input type="radio" name="selectedUserScript" checked id="script1Radio" onclick="selectScript(1)">
+            <label for="script1Radio">1</label>
+            <input type="radio" name="selectedUserScript" id="script2Radio" onclick="selectScript(2)">
+            <label for="script2Radio">2</label>
+            <input type="radio" name="selectedUserScript" id="script3Radio" onclick="selectScript(3)">
+            <label for="script3Radio">3</label>
+            <input type="radio" name="selectedUserScript" id="script4Radio" onclick="selectScript(4)">
+            <label for="script4Radio">4</label>
+            <input type="radio" name="selectedUserScript" id="script5Radio" onclick="selectScript(5)">
+            <label for="script5Radio">5</label>
+            <input type="radio" name="selectedUserScript" id="script6Radio" onclick="selectScript(6)">
+            <label for="script6Radio">6</label>
+        </div>
+        <div class="vspacer"></div>
+        <textarea id="userDefinedCode"> </textarea>
+    </div>
+
+    <script type="text/javascript">
+        let audioCtx;
+        let buffer;
+        //let N;
+        let sources = Array(128).fill(null);
+        let envelopes = Array(128).fill(null);
+        let noteTimes = Array(128).fill(null);
+        let noteVelocities = Array(128).fill(null);
+        let midi = null;
+
+        let attackTime, releaseTime;
+
+        const vid = document.querySelector("#vid");
+        const vidCanvas = document.querySelector("#vidCanvas")
+        const waveCanvas = document.querySelector("#waveCanvas");
+
+        let userDefinedCode = new Array("", "", "", "", "", "");
+        loadDefaultUserDefinedCode();
+        let currentScript = 0;
+        selectScript(1);
+
+        let vidctx, wavectx;
+        let w_vid=800, h_vid=600;
+        let w_wave=800, h_wave=100;
+
+        // Update wave canvas width and height
+        waveCanvas.width = w_wave;
+        waveCanvas.height = h_wave;
+
+        navigator.requestMIDIAccess({ sysex: false }).then(onMIDISuccess, onMIDIFailure);
+
+        openBestResolution();
+
+        window.onload = function()
+        {
+            window.onresize();
+            window.setInterval(draw, 100);
+        }
+
+        window.onresize = function()
+        {
+            // Note: I added the willReadFrequently as suggested by a warning
+            // from Chromium saying that multiple readback operations are
+            // faster when it's set.
+            vidctx = vidCanvas.getContext("2d", { willReadFrequently: true });
+            wavectx = waveCanvas.getContext("2d");
+        }
+
+        function selectScript(n)
+        {
+            console.log(`Script ${n} selected.`);
+            if (currentScript > 0)
+            {
+                userDefinedCode[currentScript-1] = document.querySelector("#userDefinedCode").value;
+            }
+            document.querySelector("#userDefinedCode").value = userDefinedCode[n-1];
+            currentScript = n;
+        }
+
+        function draw()
+        {
+            vidctx.drawImage(vid, 0, 0);
+
+            let idata = vidctx.getImageData(0, 0, w_vid, h_vid); // get frame data
+            let p = idata.data;                                  // extract pixel data
+            let x, y, m, w = w_vid, h = h_vid;
+
+            // Create an array to store captured wave
+            wave = Array(w_vid).fill(0);
+
+            // Run user defined code to fill wave buffer
+            eval(document.getElementById("userDefinedCode").value);
+
+            // Redraw video frame with modified pixels
+            //vidctx.putImageData(idata, 0, 0);
+            
+            // Draw captured waveform
+            wavectx.clearRect(0, 0, w_wave, h_wave);
+            wavectx.beginPath();
+            wavectx.strokeStyle = "#3F3F3F";
+            wavectx.lineWidth = 1.0;
+            wavectx.moveTo(0, h_wave * (0.95 - 0.9*wave[0]));
+            for (x=1 ; x<w ; ++x) wavectx.lineTo(x, h_wave * (0.95 - 0.9*wave[x]));
+            wavectx.stroke();
+
+            // Calculate mean of waveform samples
+            let mean = 0;
+            for (x=0 ; x<w ; ++x) mean += wave[x];
+            mean /= w;
+            
+            // Subtract mean from each sample before copying it to the webAudio buffer
+            if (audioCtx)
+            {
+                const buf = buffer.getChannelData(0);
+                for (let i=0 ; i<w ; i++) buf[i] = wave[i] - mean;
+            }
+            else initAudio();
+        }
+
+        function onMIDIMessage(event)
+        {
+            if (event.data[0] == 0x90)
+            {
+                noteOn(event.data[1], event.data[2]);
+            }
+            else if (event.data[0] == 0x80)
+            {
+                noteOff(event.data[1], event.data[2]);
+            }
+            else
+            {
+                let str = `MIDI message received at timestamp ` +
+                    `${event.timeStamp}[${event.data.length} bytes]: `;
+                for (const character of event.data)
+                {
+                    str += `0x${character.toString(16)} `;
+                }
+                console.log(str);
+            }
+        }
+
+        function noteOn(noteNumber, noteVelocity)
+        {
+            if (!audioCtx) initAudio();
+
+            console.log(`Note on: noteNumber=${noteNumber}, noteVelocity=${noteVelocity}`);
+
+            //const semitone = 1.059463094359295;
+            let f = 440.0 * 2.0**((noteNumber-69.0)/12.0);
+
+            // If an existing source is playing this note then
+            // stop it and null that element in sources array
+            if (sources[noteNumber])
+            {
+                sources[noteNumber].stop();
+                sources[noteNumber] = null;
+            }
+
+            // Get current time
+            let now = audioCtx.currentTime;
+
+            // Create a new source to play this note
+            let source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.loop = true;
+            source.playbackRate.value = f * w_vid / audioCtx.sampleRate;
+            let envelope = new GainNode(audioCtx);
+            envelope.gain.setValueAtTime(0, now);
+            envelope.gain.linearRampToValueAtTime(noteVelocity/128.0, now + attackTime)
+            source.connect(envelope).connect(audioCtx.destination);
+            source.start();
+
+            // Remember the new source so that we can stop it later
+            sources[noteNumber] = source;
+            envelopes[noteNumber] = envelope;
+            noteTimes[noteNumber] = now;
+            noteVelocities[noteNumber] = noteVelocity;
+        }
+
+        function noteOff(noteNumber, noteVelocity)
+        {
+            console.log(`Note off: noteNumber=${noteNumber}, noteVelocity=${noteVelocity}`);
+
+            // Either start release now or at end of attack, whichever comes later
+            let t = audioCtx.currentTime;
+            if (noteTimes[noteNumber] + attackTime > t)
+            {
+                t = noteTimes[noteNumber] + attackTime ;
+            }
+            let envelope = envelopes[noteNumber];
+            envelope.gain.setValueAtTime(noteVelocities[noteNumber]/128.0, t);
+            envelope.gain.linearRampToValueAtTime(0, t + releaseTime);
+            sources[noteNumber].stop(t + releaseTime);
+            sources[noteNumber] = null;
+            envelopes[noteNumber] = null;
+            noteTimes[noteNumber] = null;
+            noteVelocities[noteNumber] = null;
+        }
+
+        function initAudio()
+        {
+            // Initialise audio by creating audio context and allocating wavetable buffer
+            console.log("initAudio");
+            audioCtx = new AudioContext();
+            buffer = audioCtx.createBuffer(1, w_vid, audioCtx.sampleRate);
+        }
+
+        async function openBestResolution()
+        {
+            // VideoTimbre currently always runs at 800 x 600 resolution
+            const resolutions = [
+                //{ width: 3840, height: 2160 }, // 4K
+                //{ width: 1920, height: 1080 }, // 1080p
+                //{ width: 1280, height: 720 },  // 720p
+                { width: 800, height: 600 },   // ??
+                { width: 640, height: 480 }    // VGA
+            ];
+
+            for (let res of resolutions)
+            {
+                try {
+                    console.log(`Trying resolution ${res.width}x${res.height}...`);
+
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: { width: { exact: res.width }, height: { exact: res.height } }
+                    });
+                    console.log(`Supported :-)`);
+                    vid.srcObject = stream;
+
+                    console.log(`Max width: ${stream.getVideoTracks()[0].getCapabilities().width.max}`);
+                    console.log(`Max height: ${stream.getVideoTracks()[0].getCapabilities().height.max}`);
+
+                    break;
+                } catch (e) {
+                    console.log(`Not supported :-(`);
+                }
+            }
+        }
+
+        function onMIDISuccess(midiAccess)
+        {
+            console.log("MIDI ready!");
+
+            // store in the global midi object
+            midi = midiAccess; 
+            listMIDIInputsAndOutputs(midi);
+
+            // Processing incoming MIDI data from all inputs
+            midi.inputs.forEach((entry) => {
+                entry.onmidimessage = onMIDIMessage;
+            });
+        }
+
+        function onMIDIFailure(msg)
+        {
+            console.error(`Failed to get MIDI access - ${msg}`);
+        }
+
+        function listMIDIInputsAndOutputs(midiAccess)
+        {
+            console.log("MIDI inputs:");
+            for (const entry of midiAccess.inputs)
+            {
+                const input = entry[1];
+                console.log(
+                    `Input port [type:'${input.type}']` +
+                    ` id:'${input.id}'` +
+                    ` manufacturer:'${input.manufacturer}'` +
+                    ` name:'${input.name}'` +
+                    ` version:'${input.version}'`,
+                );
+            }
+
+            console.log("MIDI outputs:");
+            for (const entry of midiAccess.outputs)
+            {
+                const output = entry[1];
+                console.log(
+                    `Output port [type:'${output.type}']` +
+                    ` id:'${output.id}'` +
+                    ` manufacturer:'${output.manufacturer}'` +
+                    ` name:'${output.name}'` +
+                    ` version:'${output.version}'`,
+                );
+            }
+        }
+
+        function loadDefaultUserDefinedCode()
+        {
+            userDefinedCode[0] =
+`attackTime = 0.1; 
+releaseTime = 0.5;
+
+// Sample values should be between 0.0 and 1.0
+for (x=0 ; x<w; x++)
+{
+    wave[x] = 0;
+    for (y=0 ; y<h; y++)
+    {
+        m = 4 * (y*w + x);
+        val = p[m] + p[m+1] + p[m+2];
+        if (val > wave[x]) wave[x] = val;
+    }
+    wave[x] /= 3*256.0;
+}`;
+            userDefinedCode[1] =
+`attackTime = 0.5;
+releaseTime = 1.0;
+
+for (x=0 ; x<w ; x++)
+{
+    let min = 1024;
+    let y_min, red, green, blue, val;
+    for (y=0 ; y<h ; y++)
+    {
+        m = 4 * (y*w + x);
+        red = p[m];
+        green = p[m+1];
+        blue = p[m+2]
+        val = red + green + blue;
+        if (val < min)
+        {
+            min = val;
+            y_min = y;
+        }
+    }
+    wave[x] = 1.0 - y_min / h_vid;
+}`;
+        }
+
+    </script>
+</body>
+</html>
+
