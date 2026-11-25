@@ -373,10 +373,9 @@ for (x=0 ; x<w ; x++)
     for (y=0 ; y<h ; y++)
     {
         m = 4 * (y*w + x);
-        red = p[m];
-        green = p[m+1];
-        blue = p[m+2]
+        red = p[m]; green = p[m+1]; blue = p[m+2]
         val = red + green + blue;
+
         if (val < min)
         {
             min = val;
