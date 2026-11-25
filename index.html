@@ -343,7 +343,9 @@
         function loadDefaultUserDefinedCode()
         {
             userDefinedCode[0] =
-`attackTime = 0.1; 
+`// find max pixel value in each column
+
+attackTime = 0.1; 
 releaseTime = 0.5;
 
 // Sample values should be between 0.0 and 1.0
@@ -359,7 +361,9 @@ for (x=0 ; x<w; x++)
     wave[x] /= 3*256.0;
 }`;
             userDefinedCode[1] =
-`attackTime = 0.5;
+`// find y coordinate of darkest pixel in each column
+
+attackTime = 0.5;
 releaseTime = 1.0;
 
 for (x=0 ; x<w ; x++)
@@ -380,6 +384,24 @@ for (x=0 ; x<w ; x++)
         }
     }
     wave[x] = 1.0 - y_min / h_vid;
+}`;
+
+            userDefinedCode[2] =
+`// find mean pixel value in each column
+            
+attackTime = 0.1;
+releaseTime = 0.5;
+
+for (x=0 ; x<w ; x++)
+{
+    let red, green, blue, mean=0;
+    for (y=0 ; y<h-1 ; y++)
+    {
+        m = 4 * (y*w + x);
+        mean += p[m]+p[m+1]+p[m+2];
+    }
+    mean /= h;
+    wave[x] = 1.0 - mean/(3*256.0);
 }`;
         }
 
